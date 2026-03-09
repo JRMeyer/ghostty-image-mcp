@@ -4,6 +4,12 @@ An MCP server that displays images inline in [Ghostty](https://ghostty.org/) usi
 
 Built for use with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), but works with any MCP client running in a Kitty-compatible terminal.
 
+<p align="center">
+  <img src="screenshots/1.png" width="32%"/>
+  <img src="screenshots/2.png" width="32%"/>
+  <img src="screenshots/3.png" width="32%"/>
+</p>
+
 ## Features
 
 - Display images directly in the terminal (PNG, JPEG, SVG, and more)
@@ -64,4 +70,4 @@ The `show_image` tool accepts:
 
 ## How it works
 
-The server captures the controlling TTY at startup (before MCP stdio transport takes over), then writes Kitty graphics protocol escape sequences directly using raw file descriptor I/O (`os.write`). Images are sent as chunked base64-encoded PNG data with `q=2` to suppress terminal acknowledgment responses, which prevents escape sequence text from leaking into TUI applications like Claude Code.
+The server captures the controlling TTY at startup (before MCP stdio transport takes over), then writes Kitty graphics protocol escape sequences directly using raw file descriptor I/O (`os.write`). It uses file-based transfer (`t=f`) — the terminal reads the PNG file directly from disk via a single small escape sequence. `q=2` suppresses terminal acknowledgment responses, which prevents escape sequence text from leaking into TUI applications like Claude Code.
