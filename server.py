@@ -84,23 +84,21 @@ def get_pdf_page_count(file_path):
     return Quartz.CGPDFDocumentGetNumberOfPages(pdf_doc)
 
 
-def to_png(file_path, page=None):
-    """Convert image to PNG, returning the PNG file path."""
+def to_png(file_path, page=None, max_width=800):
+    """Convert image to PNG and resize, returning the PNG file path."""
     if file_path.lower().endswith(".pdf"):
         return pdf_page_to_png(file_path, page or 1)
-
-    if file_path.lower().endswith(".png"):
-        return file_path
 
     tmp_png = "/tmp/_mcp_ghostty_image.png"
     if file_path.lower().endswith(".svg"):
         subprocess.run(
-            ["rsvg-convert", "-w", "2000", file_path, "-o", tmp_png],
+            ["rsvg-convert", "-w", str(max_width), file_path, "-o", tmp_png],
             capture_output=True
         )
     else:
         subprocess.run(
-            ["sips", "-s", "format", "png", file_path, "--out", tmp_png],
+            ["sips", "-s", "format", "png", "--resampleWidth", str(max_width),
+             file_path, "--out", tmp_png],
             capture_output=True
         )
     return tmp_png
@@ -137,29 +135,18 @@ async def show_image(file_path: str, scale: float = 0.75, page: int | None = Non
     if not png_path or not os.path.exists(png_path):
         return "Error: Failed to convert image to PNG"
 
-    # Read PNG data and base64-encode
-    with open(png_path, "rb") as f:
-        data = base64.standard_b64encode(f.read()).decode()
-
     cols = get_terminal_cols()
     display_cols = max(1, int(cols * scale))
     left_margin = (cols - display_cols) // 2
 
-    # Render synchronously during tool execution (Claude Code shows spinner,
-    # minimal TTY contention). Image overlays current cursor position.
-    CHUNK = 4096
+    # Use file-based transfer (t=f) — terminal reads the file directly.
+    # Single small escape sequence instead of hundreds of chunked writes.
+    png_path_b64 = base64.standard_b64encode(png_path.encode()).decode()
     tty_fd = os.open(TTY_PATH, os.O_WRONLY)
     try:
         if left_margin > 0:
             os.write(tty_fd, f"\x1b[{left_margin + 1}G".encode())
-        for i in range(0, len(data), CHUNK):
-            chunk = data[i:i + CHUNK]
-            is_last = (i + CHUNK >= len(data))
-            m = 0 if is_last else 1
-            if i == 0:
-                os.write(tty_fd, f"\x1b_Ga=T,f=100,t=d,c={display_cols},m={m},q=2;{chunk}\x1b\\".encode())
-            else:
-                os.write(tty_fd, f"\x1b_Gm={m};{chunk}\x1b\\".encode())
+        os.write(tty_fd, f"\x1b_Ga=T,f=100,t=f,c={display_cols},q=2;{png_path_b64}\x1b\\".encode())
         os.write(tty_fd, b"\n" * 10)
     finally:
         os.close(tty_fd)
