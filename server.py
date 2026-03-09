@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mcp"]
+# dependencies = ["mcp", "pyobjc-framework-Quartz"]
 # ///
 
 from mcp.server.fastmcp import FastMCP
@@ -35,8 +35,60 @@ def get_terminal_cols():
         return 80
 
 
-def to_png(file_path):
+def pdf_page_to_png(file_path, page=1):
+    """Render a specific page of a PDF to PNG using CoreGraphics (macOS)."""
+    import Quartz
+    from CoreFoundation import CFURLCreateFromFileSystemRepresentation
+
+    tmp_png = "/tmp/_mcp_ghostty_image.png"
+    url = CFURLCreateFromFileSystemRepresentation(None, file_path.encode(), len(file_path.encode()), False)
+    pdf_doc = Quartz.CGPDFDocumentCreateWithURL(url)
+    if not pdf_doc:
+        return None
+
+    page_count = Quartz.CGPDFDocumentGetNumberOfPages(pdf_doc)
+    if page < 1 or page > page_count:
+        return None
+
+    pdf_page = Quartz.CGPDFDocumentGetPage(pdf_doc, page)
+    rect = Quartz.CGPDFPageGetBoxRect(pdf_page, Quartz.kCGPDFMediaBox)
+    # Render at 2x for sharpness
+    scale_factor = 2.0
+    w = int(rect.size.width * scale_factor)
+    h = int(rect.size.height * scale_factor)
+
+    cs = Quartz.CGColorSpaceCreateDeviceRGB()
+    ctx = Quartz.CGBitmapContextCreate(None, w, h, 8, 4 * w, cs, Quartz.kCGImageAlphaPremultipliedLast)
+    Quartz.CGContextSetRGBFillColor(ctx, 1, 1, 1, 1)
+    Quartz.CGContextFillRect(ctx, Quartz.CGRectMake(0, 0, w, h))
+    Quartz.CGContextScaleCTM(ctx, scale_factor, scale_factor)
+    Quartz.CGContextDrawPDFPage(ctx, pdf_page)
+
+    image = Quartz.CGBitmapContextCreateImage(ctx)
+    url_out = CFURLCreateFromFileSystemRepresentation(None, tmp_png.encode(), len(tmp_png.encode()), False)
+    dest = Quartz.CGImageDestinationCreateWithURL(url_out, "public.png", 1, None)
+    Quartz.CGImageDestinationAddImage(dest, image, None)
+    Quartz.CGImageDestinationFinalize(dest)
+    return tmp_png
+
+
+def get_pdf_page_count(file_path):
+    """Get the number of pages in a PDF."""
+    import Quartz
+    from CoreFoundation import CFURLCreateFromFileSystemRepresentation
+
+    url = CFURLCreateFromFileSystemRepresentation(None, file_path.encode(), len(file_path.encode()), False)
+    pdf_doc = Quartz.CGPDFDocumentCreateWithURL(url)
+    if not pdf_doc:
+        return 0
+    return Quartz.CGPDFDocumentGetNumberOfPages(pdf_doc)
+
+
+def to_png(file_path, page=None):
     """Convert image to PNG, returning the PNG file path."""
+    if file_path.lower().endswith(".pdf"):
+        return pdf_page_to_png(file_path, page or 1)
+
     if file_path.lower().endswith(".png"):
         return file_path
 
@@ -55,12 +107,13 @@ def to_png(file_path):
 
 
 @mcp.tool()
-async def show_image(file_path: str, scale: float = 0.75) -> str:
+async def show_image(file_path: str, scale: float = 0.75, page: int | None = None) -> str:
     """Display an image in the terminal using Kitty graphics protocol via Ghostty.
 
     Args:
-        file_path: Path to the image file.
+        file_path: Path to the image file (PNG, JPEG, SVG, PDF, etc.).
         scale: Fraction of terminal width to use (0.1–1.0). Default 0.75.
+        page: Page number for PDFs (1-indexed). Defaults to 1.
     """
     if not TTY_PATH:
         return "Error: No controlling TTY found"
@@ -72,18 +125,25 @@ async def show_image(file_path: str, scale: float = 0.75) -> str:
     # Clamp scale to [0.1, 1.0]
     scale = max(0.1, min(1.0, scale))
 
+    # For PDFs, validate page number
+    if file_path.lower().endswith(".pdf"):
+        page_count = get_pdf_page_count(file_path)
+        page = page or 1
+        if page < 1 or page > page_count:
+            return f"Error: Page {page} out of range (1–{page_count})"
+
     # Convert to PNG for protocol compatibility
-    png_path = to_png(file_path)
-    if not os.path.exists(png_path):
+    png_path = to_png(file_path, page=page)
+    if not png_path or not os.path.exists(png_path):
         return "Error: Failed to convert image to PNG"
 
     # Read PNG data and base64-encode
     with open(png_path, "rb") as f:
         data = base64.standard_b64encode(f.read()).decode()
 
-    term_cols = get_terminal_cols()
-    display_cols = max(1, int(term_cols * scale))
-    left_margin = (term_cols - display_cols) // 2
+    cols = get_terminal_cols()
+    display_cols = max(1, int(cols * scale))
+    left_margin = (cols - display_cols) // 2
 
     # Render synchronously during tool execution (Claude Code shows spinner,
     # minimal TTY contention). Image overlays current cursor position.
@@ -100,11 +160,13 @@ async def show_image(file_path: str, scale: float = 0.75) -> str:
                 os.write(tty_fd, f"\x1b_Ga=T,f=100,t=d,c={display_cols},m={m},q=2;{chunk}\x1b\\".encode())
             else:
                 os.write(tty_fd, f"\x1b_Gm={m};{chunk}\x1b\\".encode())
-        os.write(tty_fd, b"\n\n\n\n")
+        os.write(tty_fd, b"\n" * 10)
     finally:
         os.close(tty_fd)
 
-    return f"Displayed: {file_path} (scale={scale})"
+    page_info = f", page {page}/{get_pdf_page_count(file_path)}" if page else ""
+    name = os.path.basename(file_path)
+    return f"{name}{page_info}"
 
 
 if __name__ == "__main__":
