@@ -144,6 +144,7 @@ async def show_image(file_path: str, scale: float = 0.75, page: int | None = Non
     png_path_b64 = base64.standard_b64encode(png_path.encode()).decode()
     tty_fd = os.open(TTY_PATH, os.O_WRONLY)
     try:
+        os.write(tty_fd, b"\n")
         if left_margin > 0:
             os.write(tty_fd, f"\x1b[{left_margin + 1}G".encode())
         os.write(tty_fd, f"\x1b_Ga=T,f=100,t=f,c={display_cols},q=2;{png_path_b64}\x1b\\".encode())
