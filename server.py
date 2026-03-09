@@ -92,7 +92,7 @@ def to_png(file_path, page=None, max_width=800):
     tmp_png = "/tmp/_mcp_ghostty_image.png"
     if file_path.lower().endswith(".svg"):
         subprocess.run(
-            ["rsvg-convert", "-w", str(max_width), file_path, "-o", tmp_png],
+            ["rsvg-convert", "-w", "2000", file_path, "-o", tmp_png],
             capture_output=True
         )
     else:
