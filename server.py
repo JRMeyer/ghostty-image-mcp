@@ -9,6 +9,8 @@ import fcntl
 import os
 import struct
 import subprocess
+import random
+import tempfile
 import termios
 
 mcp = FastMCP("ghostty-image")
@@ -40,7 +42,8 @@ def pdf_page_to_png(file_path, page=1):
     import Quartz
     from CoreFoundation import CFURLCreateFromFileSystemRepresentation
 
-    tmp_png = "/tmp/_mcp_ghostty_image.png"
+    fd, tmp_png = tempfile.mkstemp(suffix=".png", prefix="_mcp_ghostty_")
+    os.close(fd)
     url = CFURLCreateFromFileSystemRepresentation(None, file_path.encode(), len(file_path.encode()), False)
     pdf_doc = Quartz.CGPDFDocumentCreateWithURL(url)
     if not pdf_doc:
@@ -89,7 +92,8 @@ def to_png(file_path, page=None, max_width=800):
     if file_path.lower().endswith(".pdf"):
         return pdf_page_to_png(file_path, page or 1)
 
-    tmp_png = "/tmp/_mcp_ghostty_image.png"
+    fd, tmp_png = tempfile.mkstemp(suffix=".png", prefix="_mcp_ghostty_")
+    os.close(fd)
     if file_path.lower().endswith(".svg"):
         subprocess.run(
             ["rsvg-convert", "-w", "2000", file_path, "-o", tmp_png],
@@ -139,15 +143,14 @@ async def show_image(file_path: str, scale: float = 0.75, page: int | None = Non
     display_cols = max(1, int(cols * scale))
     left_margin = (cols - display_cols) // 2
 
-    # Use file-based transfer (t=f) — terminal reads the file directly.
-    # Single small escape sequence instead of hundreds of chunked writes.
     png_path_b64 = base64.standard_b64encode(png_path.encode()).decode()
+    image_id = random.randint(1, 2**24)
     tty_fd = os.open(TTY_PATH, os.O_WRONLY)
     try:
         os.write(tty_fd, b"\n")
         if left_margin > 0:
             os.write(tty_fd, f"\x1b[{left_margin + 1}G".encode())
-        os.write(tty_fd, f"\x1b_Ga=T,f=100,t=f,c={display_cols},q=2;{png_path_b64}\x1b\\".encode())
+        os.write(tty_fd, f"\x1b_Ga=T,f=100,t=f,i={image_id},c={display_cols},q=2;{png_path_b64}\x1b\\".encode())
         os.write(tty_fd, b"\n" * 10)
     finally:
         os.close(tty_fd)
